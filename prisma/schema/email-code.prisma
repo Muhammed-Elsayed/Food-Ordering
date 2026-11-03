@@ -1,0 +1,21 @@
+enum EmailCodePurpose {
+  register
+  password_reset
+
+  @@map("email_code_purpose")
+}
+
+// One-time codes sent by email, at most one per email and purpose. Only an HMAC of the
+// code is stored.
+model EmailCode {
+  email      String
+  purpose    EmailCodePurpose
+  codeHash   String           @map("code_hash")
+  codeSentAt DateTime         @map("code_sent_at") @db.Timestamptz(6)
+  expiresAt  DateTime         @map("expires_at") @db.Timestamptz(6)
+  attempts   Int              @default(0)
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([email, purpose])
+  @@map("email_codes")
+}

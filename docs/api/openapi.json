@@ -1,0 +1,2165 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Food Ordering API",
+    "version": "1.0.0",
+    "license": {
+      "name": "ISC"
+    },
+    "description": "Accounts and authentication for the Food Ordering backend.\n\n**Tokens.** Every login, verified sign-up, and refresh returns an `accessToken` (15 minutes) and a\n`refreshToken` (1 day, rotated on every use). Send the access token as `Authorization: Bearer <token>`.\nWhen a request returns 401 `InvalidTokenError`, call `POST /auth/refresh` once and retry.\n\n**Errors** have the shape `{ \"error\": \"...\", \"message\": \"...\" }`, sometimes with `fields`,\n`signInMethod`, or `attemptsLeft`. The two Google routes answer their own failures with `{ \"message\": \"...\" }`.\n\n**Email codes** are not emailed yet: the server prints them to its console."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Is the server up?"
+    },
+    {
+      "name": "Sign-up",
+      "description": "Email and password sign-up, confirmed with a 6-digit code."
+    },
+    {
+      "name": "Login and sessions",
+      "description": "Password login, refresh, logout, and the current user."
+    },
+    {
+      "name": "Password",
+      "description": "Change the password while logged in, or reset a forgotten one with an emailed code."
+    },
+    {
+      "name": "Google",
+      "description": "Browser-only flow: open `/auth/google` in a browser, not in an API client."
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Health check",
+        "operationId": "health",
+        "security": [],
+        "description": "Liveness only; does not touch the database.",
+        "responses": {
+          "200": {
+            "description": "The server is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "examples": {
+                  "ok": {
+                    "value": {
+                      "status": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "Sign-up"
+        ],
+        "summary": "Start sign-up",
+        "operationId": "register",
+        "security": [],
+        "description": "Validates the details and emails a 6-digit code (valid 10 minutes). No account exists until\n`/auth/register/verify` succeeds. Registering again with the same email replaces the waiting sign-up.\n\nRate limits: 10 per hour per IP, 5 per hour per email.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "email": "sara@example.com",
+                    "password": "correct horse battery",
+                    "firstName": "Sara",
+                    "lastName": "Adel",
+                    "phone": "+201001234567"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Code sent. In development it is printed to the server console.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeSent"
+                },
+                "examples": {
+                  "codeSent": {
+                    "value": {
+                      "message": "We sent a 6-digit code to your email.",
+                      "email": "sara@example.com",
+                      "expiresIn": 600
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body. `fields` names every invalid field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                },
+                "examples": {
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "email": "Enter a valid email address.",
+                        "password": "Use 8 to 128 characters.",
+                        "firstName": "Enter 1 to 50 characters.",
+                        "lastName": "Enter 1 to 50 characters.",
+                        "phone": "Use international format, for example +201001234567."
+                      }
+                    }
+                  },
+                  "invalidJson": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "The request body must be valid JSON of at most 10 KB."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email already has an account. `signInMethod` says how to log in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictError"
+                },
+                "examples": {
+                  "password": {
+                    "value": {
+                      "error": "ConflictError",
+                      "message": "This email is already registered. Log in with your email and password.",
+                      "signInMethod": "password"
+                    }
+                  },
+                  "google": {
+                    "value": {
+                      "error": "ConflictError",
+                      "message": "This email is already registered with Google. Use Continue with Google.",
+                      "signInMethod": "google"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many sign-up attempts for this email. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server is missing a secret in its configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "missingConfig": {
+                    "value": {
+                      "error": "MissingConfigError",
+                      "message": "Set OTP_SECRET_KEY in .env, then restart."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register/verify": {
+      "post": {
+        "tags": [
+          "Sign-up"
+        ],
+        "summary": "Verify the code and create the account",
+        "operationId": "verifyRegistration",
+        "security": [],
+        "description": "Creates the account with `emailVerified: true` and logs it in. Five wrong codes end the code;\nask for a new one with `/auth/register/resend`.\n\nRate limit: 30 per 15 minutes per IP.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "email": "sara@example.com",
+                    "code": "123456"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created and logged in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                },
+                "examples": {
+                  "session": {
+                    "value": {
+                      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxZjBhMiIsInNpZCI6IjdhOGIifQ.signature",
+                      "refreshToken": "q3VwX2hMZ0JkY3pPa2xYc2Z0bXJ0aE5uYlRvd1ZtY0c",
+                      "tokenType": "Bearer",
+                      "expiresIn": 900,
+                      "refreshTokenExpiresIn": 86400,
+                      "user": {
+                        "id": "b6c1f0a2-3d4e-4f5a-8b9c-0d1e2f3a4b5c",
+                        "email": "sara@example.com",
+                        "firstName": "Sara",
+                        "lastName": "Adel",
+                        "phone": "+201001234567",
+                        "phoneVerified": false,
+                        "emailVerified": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, wrong or expired code, or no sign-up waiting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WrongCodeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                },
+                "examples": {
+                  "wrongCode": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "The code is wrong.",
+                      "attemptsLeft": 4
+                    }
+                  },
+                  "expired": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "This code has expired. Ask for a new one."
+                    }
+                  },
+                  "tooManyWrongCodes": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Too many wrong codes. Ask for a new one."
+                    }
+                  },
+                  "noSignUp": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "No sign-up is waiting for this email. Register again."
+                    }
+                  },
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "code": "Enter the 6-digit code from the email."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email got an account after the code was sent (for example with Google).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictError"
+                },
+                "examples": {
+                  "google": {
+                    "value": {
+                      "error": "ConflictError",
+                      "message": "This email is already registered with Google. Use Continue with Google.",
+                      "signInMethod": "google"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many verification attempts from your network. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register/resend": {
+      "post": {
+        "tags": [
+          "Sign-up"
+        ],
+        "summary": "Send a new code",
+        "operationId": "resendCode",
+        "security": [],
+        "description": "Replaces the code and resets the wrong-code count. Allowed once every 60 seconds.\n\nRate limits: 10 per hour per IP, 5 per hour per email.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "email": "sara@example.com"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Code sent. In development it is printed to the server console.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeSent"
+                },
+                "examples": {
+                  "codeSent": {
+                    "value": {
+                      "message": "We sent a new code to your email.",
+                      "email": "sara@example.com",
+                      "expiresIn": 600
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email, or no sign-up waiting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                },
+                "examples": {
+                  "noSignUp": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "No sign-up is waiting for this email. Register again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Asked again within 60 seconds, or rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "cooldown": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Wait 42 seconds before asking for another code."
+                    }
+                  },
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many code requests for this email. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Login and sessions"
+        ],
+        "summary": "Log in with email and password",
+        "operationId": "login",
+        "security": [],
+        "description": "Creates a new session for this device; other devices stay logged in.\n\nRate limits: 20 per 15 minutes per IP, 5 failed per 15 minutes per email.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "email": "sara@example.com",
+                    "password": "correct horse battery"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                },
+                "examples": {
+                  "session": {
+                    "value": {
+                      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxZjBhMiIsInNpZCI6IjdhOGIifQ.signature",
+                      "refreshToken": "q3VwX2hMZ0JkY3pPa2xYc2Z0bXJ0aE5uYlRvd1ZtY0c",
+                      "tokenType": "Bearer",
+                      "expiresIn": 900,
+                      "refreshTokenExpiresIn": 86400,
+                      "user": {
+                        "id": "b6c1f0a2-3d4e-4f5a-8b9c-0d1e2f3a4b5c",
+                        "email": "sara@example.com",
+                        "firstName": "Sara",
+                        "lastName": "Adel",
+                        "phone": "+201001234567",
+                        "phoneVerified": false,
+                        "emailVerified": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body. `fields` names every invalid field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                },
+                "examples": {
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "email": "Enter a valid email address.",
+                        "password": "Enter your password."
+                      }
+                    }
+                  },
+                  "invalidJson": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "The request body must be valid JSON of at most 10 KB."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unknown email or wrong password (same answer for both).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "invalid": {
+                    "value": {
+                      "error": "UnauthorizedError",
+                      "message": "Invalid email or password."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Correct password, but the account is disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "disabled": {
+                    "value": {
+                      "error": "ForbiddenError",
+                      "message": "This account is disabled."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email belongs to a Google account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictError"
+                },
+                "examples": {
+                  "google": {
+                    "value": {
+                      "error": "ConflictError",
+                      "message": "This email is already registered with Google. Use Continue with Google.",
+                      "signInMethod": "google"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many failed logins for this email. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password/change": {
+      "post": {
+        "tags": [
+          "Password"
+        ],
+        "summary": "Change the password (logged in)",
+        "operationId": "changePassword",
+        "description": "Checks the current password, sets the new one, keeps this device logged in, ends every other\nsession, and emails the owner. The current tokens keep working. No email code is needed: the\ncurrent password is the proof (use the Forgot password flow if it is unknown).\n\nA wrong current password is a 400 on `fields.currentPassword`, never a 401, so clients do not\nmistake it for an expired token.\n\nRate limits: 20 per 15 minutes per IP, 5 wrong current passwords per 15 minutes per user.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "currentPassword": "correct horse battery",
+                    "newPassword": "a brand new password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed. Other devices are signed out."
+          },
+          "400": {
+            "description": "Invalid body. `fields` names every invalid field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                },
+                "examples": {
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "currentPassword": "Your current password is wrong.",
+                        "newPassword": "Use 8 to 128 characters."
+                      }
+                    }
+                  },
+                  "invalidJson": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "The request body must be valid JSON of at most 10 KB."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or expired access token, or the session has ended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "missingToken": {
+                    "value": {
+                      "error": "MissingTokenError",
+                      "message": "Missing authentication token, please login first"
+                    }
+                  },
+                  "expiredOrInvalid": {
+                    "value": {
+                      "error": "InvalidTokenError",
+                      "message": "The provided token is invalid or expired, please login first"
+                    }
+                  },
+                  "sessionEnded": {
+                    "value": {
+                      "error": "UnauthorizedError",
+                      "message": "Your session has ended. Log in again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A Google account (no password), or the password changed during the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConflictError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                },
+                "examples": {
+                  "google": {
+                    "value": {
+                      "error": "ConflictError",
+                      "message": "This account signs in with Google, so it has no password to change.",
+                      "signInMethod": "google"
+                    }
+                  },
+                  "changedMeanwhile": {
+                    "value": {
+                      "error": "ConflictError",
+                      "message": "Your password changed while this request was running. Try again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many wrong current passwords. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password/forgot": {
+      "post": {
+        "tags": [
+          "Password"
+        ],
+        "summary": "Email a reset code",
+        "operationId": "forgotPassword",
+        "security": [],
+        "description": "Always answers 202 with the same body, so it never reveals which emails have accounts.\nActive password accounts get a 6-digit code (valid 10 minutes); Google accounts get a reminder to\nuse Continue with Google; unknown or disabled accounts get nothing. Asking again within 60 seconds\nsends nothing new: use the code already sent.\n\nRate limits: 10 per hour per IP, 5 per hour per email.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "email": "sara@example.com"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Code sent. In development it is printed to the server console.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeSent"
+                },
+                "examples": {
+                  "codeSent": {
+                    "value": {
+                      "message": "If this email has a password account, we sent it a code.",
+                      "email": "sara@example.com",
+                      "expiresIn": 600
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body. `fields` names every invalid field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                },
+                "examples": {
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "email": "Enter a valid email address."
+                      }
+                    }
+                  },
+                  "invalidJson": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "The request body must be valid JSON of at most 10 KB."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many password reset requests for this email. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password/verify-code": {
+      "post": {
+        "tags": [
+          "Password"
+        ],
+        "summary": "Exchange the code for a reset token",
+        "operationId": "verifyResetCode",
+        "security": [],
+        "description": "Every failure (wrong, expired, or used-up code, or an email without a code) gets the same 400.\nFive wrong codes end the code. On success the code is used up.\n\nRate limit: 30 per 15 minutes per IP.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "email": "sara@example.com",
+                    "code": "123456"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Code accepted. Send the reset token to `/auth/password/reset` within 10 minutes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetToken"
+                },
+                "examples": {
+                  "resetToken": {
+                    "value": {
+                      "resetToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxIn0.signature",
+                      "expiresIn": 600
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The code is not valid, or the body is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                },
+                "examples": {
+                  "invalidCode": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "This code is wrong or has expired."
+                    }
+                  },
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "code": "Enter the 6-digit code from the email."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many code attempts from your network. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password/reset": {
+      "post": {
+        "tags": [
+          "Password"
+        ],
+        "summary": "Set the new password and log in",
+        "operationId": "resetPassword",
+        "security": [],
+        "description": "Sets the new password, marks the email as verified, ends every session on every device, and logs\nthis device in. The reset token works once.\n\nRate limit: 10 per 15 minutes per IP.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "resetToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxIn0.signature",
+                    "newPassword": "a brand new password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed and logged in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                },
+                "examples": {
+                  "session": {
+                    "value": {
+                      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxZjBhMiIsInNpZCI6IjdhOGIifQ.signature",
+                      "refreshToken": "q3VwX2hMZ0JkY3pPa2xYc2Z0bXJ0aE5uYlRvd1ZtY0c",
+                      "tokenType": "Bearer",
+                      "expiresIn": 900,
+                      "refreshTokenExpiresIn": 86400,
+                      "user": {
+                        "id": "b6c1f0a2-3d4e-4f5a-8b9c-0d1e2f3a4b5c",
+                        "email": "sara@example.com",
+                        "firstName": "Sara",
+                        "lastName": "Adel",
+                        "phone": "+201001234567",
+                        "phoneVerified": false,
+                        "emailVerified": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or the reset token is invalid, expired, or already used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                },
+                "examples": {
+                  "expired": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "This password reset has expired. Ask for a new code."
+                    }
+                  },
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "newPassword": "Use 8 to 128 characters."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many password resets from your network. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "Login and sessions"
+        ],
+        "summary": "Get new tokens",
+        "operationId": "refresh",
+        "security": [],
+        "description": "Returns a new access token and a new refresh token. The refresh token you sent stops working.\n\nRate limit: 60 per 15 minutes per IP.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              },
+              "examples": {
+                "example": {
+                  "value": {
+                    "refreshToken": "q3VwX2hMZ0JkY3pPa2xYc2Z0bXJ0aE5uYlRvd1ZtY0c"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New tokens.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                },
+                "examples": {
+                  "session": {
+                    "value": {
+                      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxZjBhMiIsInNpZCI6IjdhOGIifQ.signature",
+                      "refreshToken": "q3VwX2hMZ0JkY3pPa2xYc2Z0bXJ0aE5uYlRvd1ZtY0c",
+                      "tokenType": "Bearer",
+                      "expiresIn": 900,
+                      "refreshTokenExpiresIn": 86400,
+                      "user": {
+                        "id": "b6c1f0a2-3d4e-4f5a-8b9c-0d1e2f3a4b5c",
+                        "email": "sara@example.com",
+                        "firstName": "Sara",
+                        "lastName": "Adel",
+                        "phone": "+201001234567",
+                        "phoneVerified": false,
+                        "emailVerified": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body. `fields` names every invalid field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                },
+                "examples": {
+                  "invalidFields": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "Some fields are invalid.",
+                      "fields": {
+                        "refreshToken": "Send the refresh token from your last login."
+                      }
+                    }
+                  },
+                  "invalidJson": {
+                    "value": {
+                      "error": "BadRequestError",
+                      "message": "The request body must be valid JSON of at most 10 KB."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unknown, already used, or expired refresh token, or a disabled account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "sessionEnded": {
+                    "value": {
+                      "error": "UnauthorizedError",
+                      "message": "Your session has ended. Log in again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the limit resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit": {
+                "description": "e.g. `limit=5, remaining=0, reset=900`",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "e.g. `5;w=900`",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "value": {
+                      "error": "TooManyRequestsError",
+                      "message": "Too many refresh attempts from your network. Try again later."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "Login and sessions"
+        ],
+        "summary": "Log out of every device",
+        "operationId": "logout",
+        "description": "Deletes every session of the user. All access and refresh tokens stop working immediately.",
+        "responses": {
+          "204": {
+            "description": "Logged out everywhere."
+          },
+          "401": {
+            "description": "Missing, invalid, or expired access token, or the session has ended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "missingToken": {
+                    "value": {
+                      "error": "MissingTokenError",
+                      "message": "Missing authentication token, please login first"
+                    }
+                  },
+                  "expiredOrInvalid": {
+                    "value": {
+                      "error": "InvalidTokenError",
+                      "message": "The provided token is invalid or expired, please login first"
+                    }
+                  },
+                  "sessionEnded": {
+                    "value": {
+                      "error": "UnauthorizedError",
+                      "message": "Your session has ended. Log in again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server is missing a secret in its configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "missingConfig": {
+                    "value": {
+                      "error": "MissingConfigError",
+                      "message": "Set JWT_SECRET_KEY in .env, then restart."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "Login and sessions"
+        ],
+        "summary": "Current user",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "The logged-in user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                },
+                "examples": {
+                  "me": {
+                    "value": {
+                      "user": {
+                        "id": "b6c1f0a2-3d4e-4f5a-8b9c-0d1e2f3a4b5c",
+                        "email": "sara@example.com",
+                        "firstName": "Sara",
+                        "lastName": "Adel",
+                        "phone": "+201001234567",
+                        "phoneVerified": false,
+                        "emailVerified": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or expired access token, or the session has ended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "missingToken": {
+                    "value": {
+                      "error": "MissingTokenError",
+                      "message": "Missing authentication token, please login first"
+                    }
+                  },
+                  "expiredOrInvalid": {
+                    "value": {
+                      "error": "InvalidTokenError",
+                      "message": "The provided token is invalid or expired, please login first"
+                    }
+                  },
+                  "sessionEnded": {
+                    "value": {
+                      "error": "UnauthorizedError",
+                      "message": "Your session has ended. Log in again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server is missing a secret in its configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "missingConfig": {
+                    "value": {
+                      "error": "MissingConfigError",
+                      "message": "Set JWT_SECRET_KEY in .env, then restart."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/google": {
+      "get": {
+        "tags": [
+          "Google"
+        ],
+        "summary": "Start Continue with Google (browser only)",
+        "operationId": "googleStart",
+        "security": [],
+        "description": "Redirects to Google and sets an `oauth_browser` cookie. Open this URL in a browser; after you pick an account, Google sends you to `/auth/google/callback`, which shows the session JSON. Copy `accessToken` and `refreshToken` from there.",
+        "responses": {
+          "302": {
+            "description": "Redirect to Google.",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Could not start.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                },
+                "examples": {
+                  "failed": {
+                    "value": {
+                      "message": "Could not start authorization. Try again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Google client not configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                },
+                "examples": {
+                  "missing": {
+                    "value": {
+                      "message": "Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET in .env, then restart."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/google/callback": {
+      "get": {
+        "tags": [
+          "Google"
+        ],
+        "summary": "Google redirects here (browser only)",
+        "operationId": "googleCallback",
+        "security": [],
+        "description": "Called by Google, not by you. Needs the cookie set by `/auth/google` in the same browser.",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged in to an existing account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                },
+                "examples": {
+                  "session": {
+                    "value": {
+                      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxZjBhMiIsInNpZCI6IjdhOGIifQ.signature",
+                      "refreshToken": "q3VwX2hMZ0JkY3pPa2xYc2Z0bXJ0aE5uYlRvd1ZtY0c",
+                      "tokenType": "Bearer",
+                      "expiresIn": 900,
+                      "refreshTokenExpiresIn": 86400,
+                      "user": {
+                        "id": "b6c1f0a2-3d4e-4f5a-8b9c-0d1e2f3a4b5c",
+                        "email": "sara@example.com",
+                        "firstName": "Sara",
+                        "lastName": "Adel",
+                        "phone": "+201001234567",
+                        "phoneVerified": false,
+                        "emailVerified": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "First Google login: account created and logged in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                },
+                "examples": {
+                  "session": {
+                    "value": {
+                      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNmMxZjBhMiIsInNpZCI6IjdhOGIifQ.signature",
+                      "refreshToken": "q3VwX2hMZ0JkY3pPa2xYc2Z0bXJ0aE5uYlRvd1ZtY0c",
+                      "tokenType": "Bearer",
+                      "expiresIn": 900,
+                      "refreshTokenExpiresIn": 86400,
+                      "user": {
+                        "id": "b6c1f0a2-3d4e-4f5a-8b9c-0d1e2f3a4b5c",
+                        "email": "sara@example.com",
+                        "firstName": "Sara",
+                        "lastName": "Adel",
+                        "phone": "+201001234567",
+                        "phoneVerified": false,
+                        "emailVerified": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown, used, or expired attempt; or Google returned no code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                },
+                "examples": {
+                  "invalid": {
+                    "value": {
+                      "message": "Invalid or expired attempt. Start again at /auth/google."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Google identity failed verification.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                },
+                "examples": {
+                  "unverified": {
+                    "value": {
+                      "message": "Could not verify the Google identity. Start again at /auth/google."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "New account, but the Google email is not verified; or the account is disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "emailNotVerified": {
+                    "value": {
+                      "error": "ForbiddenError",
+                      "message": "Your Google account's email is not verified, so it cannot be used to create an account."
+                    }
+                  },
+                  "disabled": {
+                    "value": {
+                      "error": "ForbiddenError",
+                      "message": "This account is disabled."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email belongs to another account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictError"
+                },
+                "examples": {
+                  "password": {
+                    "value": {
+                      "error": "ConflictError",
+                      "message": "This email is registered with a password. Log in with your email and password.",
+                      "signInMethod": "password"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Token exchange with Google failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                },
+                "examples": {
+                  "failed": {
+                    "value": {
+                      "message": "Token exchange failed. Check the client settings and start again at /auth/google."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "firstName",
+          "lastName",
+          "phone",
+          "phoneVerified",
+          "emailVerified"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "firstName": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastName": {
+            "type": "string",
+            "nullable": true
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true,
+            "description": "E.164, e.g. +201001234567"
+          },
+          "phoneVerified": {
+            "type": "boolean"
+          },
+          "emailVerified": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AuthSession": {
+        "type": "object",
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "tokenType",
+          "expiresIn",
+          "refreshTokenExpiresIn",
+          "user"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "JWT. Send as `Authorization: Bearer <token>`."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Send to `/auth/refresh`. Single use."
+          },
+          "tokenType": {
+            "type": "string",
+            "enum": [
+              "Bearer"
+            ]
+          },
+          "expiresIn": {
+            "type": "integer",
+            "description": "Access token lifetime in seconds.",
+            "example": 900
+          },
+          "refreshTokenExpiresIn": {
+            "type": "integer",
+            "description": "Refresh token lifetime in seconds.",
+            "example": 86400
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": [
+          "user"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        }
+      },
+      "CodeSent": {
+        "type": "object",
+        "required": [
+          "message",
+          "email",
+          "expiresIn"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Normalized (trimmed, lowercase)."
+          },
+          "expiresIn": {
+            "type": "integer",
+            "description": "Code lifetime in seconds.",
+            "example": 600
+          }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password",
+          "firstName",
+          "lastName"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254,
+            "description": "Trimmed and lowercased by the server."
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          },
+          "firstName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "lastName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true,
+            "description": "Optional. International format; spaces, dashes, and brackets are removed."
+          }
+        }
+      },
+      "VerifyRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "code"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          }
+        }
+      },
+      "EmailRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "ResetToken": {
+        "type": "object",
+        "required": [
+          "resetToken",
+          "expiresIn"
+        ],
+        "properties": {
+          "resetToken": {
+            "type": "string",
+            "description": "Single-use. Only accepted by `/auth/password/reset`."
+          },
+          "expiresIn": {
+            "type": "integer",
+            "description": "Seconds the reset token is valid.",
+            "example": 600
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        }
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "required": [
+          "resetToken",
+          "newPassword"
+        ],
+        "properties": {
+          "resetToken": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": [
+          "refreshToken"
+        ],
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "maxLength": 100
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "BadRequestError"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ValidationError": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Error"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "fields": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Field name to problem."
+              }
+            }
+          }
+        ]
+      },
+      "ConflictError": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Error"
+          },
+          {
+            "type": "object",
+            "required": [
+              "signInMethod"
+            ],
+            "properties": {
+              "signInMethod": {
+                "type": "string",
+                "enum": [
+                  "google",
+                  "password"
+                ],
+                "description": "How this email logs in."
+              }
+            }
+          }
+        ]
+      },
+      "WrongCodeError": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Error"
+          },
+          {
+            "type": "object",
+            "required": [
+              "attemptsLeft"
+            ],
+            "properties": {
+              "attemptsLeft": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      },
+      "MessageError": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}

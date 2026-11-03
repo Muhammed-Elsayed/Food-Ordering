@@ -1,0 +1,14 @@
+// One row per logged-in device. Access JWTs carry the row id as `sid`; deleting the row
+// ends that device's access and refresh tokens at once.
+model Session {
+  id               String   @id @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String   @unique(map: "sessions_refresh_token_hash_key") @map("refresh_token_hash")
+  expiresAt        DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([userId], map: "sessions_user_id_idx")
+  @@map("sessions")
+}

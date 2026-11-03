@@ -1,0 +1,126 @@
+# Database
+
+PostgreSQL, managed with Prisma 7. Models are in `prisma/schema` (one file per model) and
+migrations in `prisma/migrations`. The generated client is written to `src/db/generated`
+during `npm run build`. `prisma.config.ts` points the CLI at these folders and reads
+`DATABASE_URL` from `.env`.
+
+## Local setup
+
+1. Install and start PostgreSQL.
+2. Create a database and a role that owns it. Don't use a superuser:
+
+   ```sql
+   CREATE ROLE food_ordering LOGIN PASSWORD 'choose-a-password';
+   CREATE DATABASE food_ordering OWNER food_ordering;
+   ```
+
+   `npm run db:migrate` also needs to create a temporary shadow database, so give the role
+   `CREATEDB` in development (`ALTER ROLE food_ordering CREATEDB;`).
+3. Put the URL in `.env`. URL-encode special characters in the password:
+
+   ```env
+   DATABASE_URL=postgresql://food_ordering:choose-a-password@localhost:5432/food_ordering?schema=public
+   ```
+
+4. Apply the migrations and check the connection:
+
+   ```bash
+   npm run db:deploy
+   npm run db:check
+   ```
+
+## Changing the schema
+
+Edit or add a file in `prisma/schema`, then create a migration and regenerate the client:
+
+```bash
+npm run db:migrate -- --name describe_the_change
+npm run db:generate
+```
+
+- `db:deploy` applies existing migrations; `db:migrate` creates new ones (it needs an
+  interactive terminal).
+- Never edit an applied migration, not even its comments. Prisma checksums every file.
+- Prisma can't express CHECK constraints or partial indexes. Add them by hand to the
+  generated `migration.sql` before applying it.
+- Don't use `prisma db push`; it bypasses the migration history.
+- `npm run db:studio` opens Prisma's database browser.
+
+## Tables
+
+### `users`
+
+| Column | Notes |
+| --- | --- |
+| `id` | UUID |
+| `email` | Unique, stored trimmed and lowercase |
+| `first_name`, `last_name` | Optional (Google may not send them), never blank |
+| `phone` | Optional, E.164 format (`+201001234567`) |
+| `phone_verified` | Requires `phone`. Verified phones are unique |
+| `email_verified` | True for Google accounts and verified sign-ups |
+| `is_active` | False blocks login, refresh, and existing sessions |
+| `password_hash` | argon2id, for password accounts |
+| `google_sub` | Unique Google account ID, for Google accounts |
+| `created_at`, `updated_at` | Timestamps |
+
+At least one of `password_hash` and `google_sub` must be set. The app always sets exactly
+one, because accounts are never linked. Phones are unique only once verified (partial index
+`users_verified_phone_unique`), so typing someone else's number can't block its owner.
+
+### `sessions`
+
+One row per logged-in device.
+
+| Column | Notes |
+| --- | --- |
+| `id` | UUID, carried in access tokens as `sid` |
+| `user_id` | The user; deleting a user deletes their sessions |
+| `refresh_token_hash` | Unique SHA-256 hex digest of the refresh token, never the token itself |
+| `expires_at` | One day after the last login or refresh |
+| `created_at`, `updated_at` | Timestamps |
+
+A refresh updates the row only if it still has the old hash, so only one of two parallel
+refreshes with the same token succeeds. Logout deletes all of a user's rows. Expired rows
+are removed the next time that user logs in.
+
+### `email_codes`
+
+One-time 6-digit codes sent by email, at most one per email and purpose.
+
+| Column | Notes |
+| --- | --- |
+| `email` | Stored trimmed and lowercase |
+| `purpose` | Enum `email_code_purpose`: `register` or `password_reset`. Key: (`email`, `purpose`) |
+| `code_hash` | HMAC-SHA256 of `purpose:email:code`, keyed with `OTP_SECRET_KEY`. A code only works for its purpose |
+| `code_sent_at` | For the 60-second cooldown between codes |
+| `expires_at` | 10 minutes after the code was sent |
+| `attempts` | Wrong guesses for the current code, at most 5; counted before comparing |
+| `created_at` | Timestamp |
+
+Sending a new code replaces the row and resets `attempts`. A row is deleted once its code is
+used. To add a new kind of code, add a value to the enum in a migration.
+
+### `pending_registrations`
+
+An email/password sign-up waiting for its code (`email_codes` with purpose `register`). The
+user row is created only after the code is verified.
+
+| Column | Notes |
+| --- | --- |
+| `email` | Primary key, stored trimmed and lowercase |
+| `password_hash` | argon2id |
+| `first_name`, `last_name` | Never blank |
+| `phone` | Optional, E.164 |
+| `created_at` | Timestamp |
+
+Registering again with the same email replaces the details. Rows are deleted once verified.
+Rows and codes that are never used stay in their tables for now.
+
+## Verification
+
+```bash
+npm run db:validate   # schema is valid
+npm run db:check      # the app can connect
+npm run test:db       # constraint tests, inside a transaction that is rolled back
+```

@@ -1,0 +1,19 @@
+// Each account has exactly one login method: googleSub (Google OIDC) or passwordHash.
+// CHECK constraints and the partial phone index live in the SQL migrations.
+model User {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String    @unique(map: "users_email_unique")
+  firstName     String?   @map("first_name")
+  lastName      String?   @map("last_name")
+  phone         String?
+  phoneVerified Boolean   @default(false) @map("phone_verified")
+  emailVerified Boolean   @default(false) @map("email_verified")
+  isActive      Boolean   @default(true) @map("is_active")
+  passwordHash  String?   @map("password_hash")
+  googleSub     String?   @unique(map: "users_google_sub_key") @map("google_sub")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sessions      Session[]
+
+  @@map("users")
+}

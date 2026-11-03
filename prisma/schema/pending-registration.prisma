@@ -1,0 +1,13 @@
+// A password sign-up waiting for its email code (in email_codes, purpose "register"). The
+// account is created only after the code is verified, so an unverified email never blocks
+// its owner.
+model PendingRegistration {
+  email        String   @id
+  passwordHash String   @map("password_hash")
+  firstName    String   @map("first_name")
+  lastName     String   @map("last_name")
+  phone        String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("pending_registrations")
+}
