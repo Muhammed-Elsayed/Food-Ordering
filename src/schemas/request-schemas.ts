@@ -1,8 +1,21 @@
 import type { RequestHandler } from "express";
 import type { ParamsDictionary, Query } from "express-serve-static-core";
+import { WebError } from "../utilities/web-errors.js";
 import type { PublicUser } from "./user-schemas.js";
 
 export type BodyParser<Input> = (body: unknown) => Input;
+
+// Collects every invalid field so the client can show all problems at once. Works for a JSON
+// body or a query string.
+export function readInput(input: unknown) {
+  const fields: Record<string, string> = {};
+  const values = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
+  const text = (key: string) => typeof values[key] === "string" ? values[key] : undefined;
+  const throwIfInvalid = () => {
+    if (Object.keys(fields).length) throw WebError.BadRequest("Some fields are invalid.", { fields });
+  };
+  return { values, fields, text, throwIfInvalid };
+}
 
 // Set by verifyToken.
 export interface AuthenticatedLocals {

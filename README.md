@@ -3,8 +3,8 @@
 A food ordering backend in the spirit of DoorDash, built step by step with Express 5,
 TypeScript, Prisma 7, and PostgreSQL.
 
-> **Status:** early development. Accounts and authentication are done; restaurants, menus,
-> carts, and orders come next.
+> **Status:** early development. Accounts, authentication, and browsing restaurants and menus
+> are done; carts and orders come next.
 
 ## Features
 
@@ -22,6 +22,9 @@ TypeScript, Prisma 7, and PostgreSQL.
   password, and the other way round. The API tells the client which method to use.
 - **Abuse protection**: per-IP and per-email rate limits, argon2id password hashing, and
   login responses that take as long for unknown emails as for wrong passwords.
+- **Restaurants and menus**: categories, restaurants with opening hours and an open/closed
+  status in the restaurant's own time zone, and menus with sections, items, and shared option
+  groups (sizes, extras) that work for any kind of restaurant. Browsing needs no login.
 - **Database constraints** for normalized emails, E.164 phone numbers, and hashed tokens and
   codes.
 
@@ -93,6 +96,9 @@ sometimes with more fields such as `fields`, `signInMethod`, or `attemptsLeft`.
 | `POST /auth/refresh` | | `refreshToken` | `200` with a new session |
 | `POST /auth/logout` | Bearer | | `204`, every device signed out |
 | `GET /auth/me` | Bearer | | `200 { user }` |
+| `GET /categories` | | | `200 { categories }` |
+| `GET /restaurants?category=&page=&limit=` | | | `200 { restaurants, page, limit, total }` |
+| `GET /restaurants/:slug` | | | `200 { restaurant, menu }`, or `404` |
 
 A session response looks like this:
 
@@ -141,6 +147,23 @@ clients don't mistake it for an expired token). Google accounts get `409`.
 3. `POST /auth/password/reset` with the `resetToken` and `newPassword`. Every existing session
    ends, and the response is a new session for this device. The reset token works once.
 
+### Browsing restaurants
+
+1. `GET /categories` for the home screen.
+2. `GET /restaurants?category=pizza` for a category's restaurants, 20 per page by default (at
+   most 50). `isOpen` is true when the restaurant is taking orders and it is within its opening
+   hours, in its own time zone.
+3. `GET /restaurants/pizza-hut` for the restaurant page: details, opening hours, and the menu
+   (sections, items, option groups, options).
+
+Prices, fees, and minimum orders are whole numbers in the smallest currency unit (piasters):
+`12500` is 125.00 EGP. An option adds its `extraPrice` to the item price, and the customer picks
+`minSelect` to `maxSelect` options from each group. Sold-out items and options are shown with
+`isAvailable: false`; removed ones are left out.
+
+Restaurants and menus are read-only through the API for now. The data is written to the
+database directly; see [prisma/README.md](prisma/README.md) for the tables.
+
 ### Rate limits
 
 Over a limit, the API returns `429` with a `Retry-After` header.
@@ -188,7 +211,8 @@ tests/
 - [x] Change and reset password
 - [ ] Real email delivery
 - [ ] Profile updates and phone verification
-- [ ] Restaurants and menus
+- [x] Browsing restaurants and menus
+- [ ] Managing restaurants and menus (CRM)
 - [ ] Cart and checkout
 - [ ] Orders and delivery tracking
 

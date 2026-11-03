@@ -1,0 +1,10 @@
+model RestaurantCategory {
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  categoryId   String     @map("category_id") @db.Uuid
+  category     Category   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([restaurantId, categoryId])
+  @@index([categoryId], map: "restaurant_categories_category_id_idx")
+  @@map("restaurant_categories")
+}

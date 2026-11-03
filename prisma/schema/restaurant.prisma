@@ -1,0 +1,30 @@
+// Prices and fees are whole amounts in the smallest unit of `currency` (piasters for EGP).
+// Branches and locations come later; for now each restaurant has one set of opening hours.
+model Restaurant {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug               String               @unique(map: "restaurants_slug_key")
+  name               String
+  description        String?
+  logoUrl            String?              @map("logo_url")
+  coverUrl           String?              @map("cover_url")
+  phone              String?
+  currency           String               @default("EGP") @db.Char(3)
+  deliveryFee        Int                  @map("delivery_fee")
+  minimumOrder       Int                  @default(0) @map("minimum_order")
+  deliveryMinutesMin Int                  @map("delivery_minutes_min")
+  deliveryMinutesMax Int                  @map("delivery_minutes_max")
+  timeZone           String               @default("Africa/Cairo") @map("time_zone")
+  // The restaurant's own switch; it takes orders only when this is on and it is within its hours.
+  isAcceptingOrders  Boolean              @default(true) @map("is_accepting_orders")
+  isActive           Boolean              @default(true) @map("is_active")
+  sortOrder          Int                  @default(0) @map("sort_order")
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  categories         RestaurantCategory[]
+  openingHours       OpeningHours[]
+  sections           MenuSection[]
+  items              MenuItem[]
+  optionGroups       OptionGroup[]
+
+  @@map("restaurants")
+}

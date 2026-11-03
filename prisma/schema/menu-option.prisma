@@ -1,0 +1,17 @@
+// One choice in an option group, such as "Large" or "Extra cheese". extraPrice is added to the
+// item's price, in the restaurant's currency.
+model MenuOption {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  optionGroupId String      @map("option_group_id") @db.Uuid
+  optionGroup   OptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Cascade)
+  name          String
+  extraPrice    Int         @default(0) @map("extra_price")
+  isAvailable   Boolean     @default(true) @map("is_available")
+  isActive      Boolean     @default(true) @map("is_active")
+  sortOrder     Int         @default(0) @map("sort_order")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([optionGroupId], map: "menu_options_option_group_id_idx")
+  @@map("menu_options")
+}

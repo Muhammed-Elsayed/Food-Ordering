@@ -1,0 +1,25 @@
+// isAvailable false: sold out for now, still shown. isActive false: removed from the menu.
+// Items are hidden rather than deleted, so carts and orders that point at them keep working.
+model MenuItem {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurantId String                @map("restaurant_id") @db.Uuid
+  restaurant   Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  sectionId    String                @map("section_id") @db.Uuid
+  section      MenuSection           @relation(fields: [sectionId, restaurantId], references: [id, restaurantId], onDelete: Cascade)
+  name         String
+  description  String?
+  imageUrl     String?               @map("image_url")
+  price        Int
+  isAvailable  Boolean               @default(true) @map("is_available")
+  isActive     Boolean               @default(true) @map("is_active")
+  sortOrder    Int                   @default(0) @map("sort_order")
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  optionGroups MenuItemOptionGroup[]
+
+  // Target of the menu_item_option_groups foreign key that keeps groups in the item's restaurant.
+  @@unique([id, restaurantId], map: "menu_items_id_restaurant_id_key")
+  @@index([sectionId], map: "menu_items_section_id_idx")
+  @@index([restaurantId], map: "menu_items_restaurant_id_idx")
+  @@map("menu_items")
+}

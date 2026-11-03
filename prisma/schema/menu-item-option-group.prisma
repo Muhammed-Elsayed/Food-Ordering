@@ -1,0 +1,14 @@
+// Attaches a shared option group to an item. restaurantId is in both foreign keys, so an item
+// can only use its own restaurant's groups.
+model MenuItemOptionGroup {
+  menuItemId    String      @map("menu_item_id") @db.Uuid
+  optionGroupId String      @map("option_group_id") @db.Uuid
+  restaurantId  String      @map("restaurant_id") @db.Uuid
+  menuItem      MenuItem    @relation(fields: [menuItemId, restaurantId], references: [id, restaurantId], onDelete: Cascade)
+  optionGroup   OptionGroup @relation(fields: [optionGroupId, restaurantId], references: [id, restaurantId], onDelete: Cascade)
+  sortOrder     Int         @default(0) @map("sort_order")
+
+  @@id([menuItemId, optionGroupId])
+  @@index([optionGroupId], map: "menu_item_option_groups_option_group_id_idx")
+  @@map("menu_item_option_groups")
+}

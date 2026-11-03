@@ -117,6 +117,35 @@ user row is created only after the code is verified.
 Registering again with the same email replaces the details. Rows are deleted once verified.
 Rows and codes that are never used stay in their tables for now.
 
+### Restaurants and menus
+
+```
+categories ──< restaurant_categories >── restaurants
+restaurants ──< opening_hours
+restaurants ──< menu_sections ──< menu_items ──< menu_item_option_groups >── option_groups ──< menu_options
+restaurants ──< option_groups      (──< means "has many")
+```
+
+Money columns (`delivery_fee`, `minimum_order`, `price`, `extra_price`) are whole amounts in
+the smallest unit of the restaurant's `currency` (piasters for EGP), never negative. Rows
+customers should not see are hidden with `is_active = false` rather than deleted, so carts and
+orders that point at them keep working. Deleting a restaurant deletes its whole menu.
+
+| Table | Notes |
+| --- | --- |
+| `categories` | `slug` is unique, lowercase with hyphens (`pizza`). `sort_order` and `is_active` control the home screen |
+| `restaurants` | Unique `slug`. `currency` (ISO 4217, default `EGP`), `delivery_fee`, `minimum_order`, `delivery_minutes_min/max`, `time_zone` (default `Africa/Cairo`). `is_accepting_orders` is the restaurant's switch; `is_active = false` hides it |
+| `restaurant_categories` | Many-to-many: a restaurant can be in several categories |
+| `opening_hours` | One row per period: `day_of_week` (0 = Sunday), `opens_at` and `closes_at` in minutes from midnight. `closes_at <= opens_at` ends the next day; `0` to `1440` is all day. A day with no rows is closed |
+| `menu_sections` | Headings such as "Pizzas" or "Drinks", ordered by `sort_order` |
+| `menu_items` | `price`. `is_available = false` is sold out (still shown); `is_active = false` removes it. A composite foreign key keeps an item in a section of its own restaurant |
+| `option_groups` | A choice such as Size: pick `min_select` to `max_select` options (`min_select >= 1` makes it required). Belongs to a restaurant and is shared by its items |
+| `menu_item_option_groups` | Attaches groups to items in `sort_order`. `restaurant_id` is part of both foreign keys, so an item can only use its own restaurant's groups |
+| `menu_options` | One choice in a group, with `extra_price` added to the item price, `is_available`, and `is_active` |
+
+The API only reads these tables for now. Branches with their own locations and hours come
+later; opening hours will move to them.
+
 ## Verification
 
 ```bash

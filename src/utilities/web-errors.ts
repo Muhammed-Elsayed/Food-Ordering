@@ -20,6 +20,10 @@ export class WebError extends Error {
     return new WebError(403, "ForbiddenError", message);
   }
 
+  static NotFound(message: string) {
+    return new WebError(404, "NotFoundError", message);
+  }
+
   static Conflict(message: string, details?: Record<string, unknown>) {
     return new WebError(409, "ConflictError", message, details);
   }

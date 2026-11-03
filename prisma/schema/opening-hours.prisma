@@ -1,0 +1,14 @@
+// One opening period. Times are minutes from midnight in the restaurant's time zone. A period
+// whose closesAt is not after opensAt ends the next day (12:00 to 02:00). A day without rows
+// is closed; a day can have several periods.
+model OpeningHours {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  dayOfWeek    Int        @map("day_of_week") @db.SmallInt // 0 = Sunday
+  opensAt      Int        @map("opens_at") @db.SmallInt
+  closesAt     Int        @map("closes_at") @db.SmallInt
+
+  @@unique([restaurantId, dayOfWeek, opensAt], map: "opening_hours_restaurant_day_opens_key")
+  @@map("opening_hours")
+}

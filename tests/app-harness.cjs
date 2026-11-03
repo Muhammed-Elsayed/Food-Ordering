@@ -20,6 +20,22 @@ const linkedUser = {
 const publicFields = ['id', 'email', 'firstName', 'lastName', 'phone', 'phoneVerified', 'emailVerified'];
 const publicUser = Object.fromEntries(publicFields.map(key => [key, linkedUser[key]]));
 
+// Column defaults for catalog rows passed in options.catalog (the app only reads them).
+const catalogDefaults = {
+  category: { imageUrl: null, sortOrder: 0, isActive: true },
+  restaurant: {
+    description: null, logoUrl: null, coverUrl: null, phone: null, currency: 'EGP', minimumOrder: 0,
+    timeZone: 'Africa/Cairo', isAcceptingOrders: true, isActive: true, sortOrder: 0,
+  },
+  restaurantCategory: {},
+  openingHours: {},
+  menuSection: { description: null, sortOrder: 0, isActive: true },
+  menuItem: { description: null, imageUrl: null, isAvailable: true, isActive: true, sortOrder: 0 },
+  optionGroup: { minSelect: 0, maxSelect: 1 },
+  menuItemOptionGroup: { sortOrder: 0 },
+  menuOption: { extraPrice: 0, isAvailable: true, isActive: true, sortOrder: 0 },
+};
+
 // Just enough of Prisma for the queries the app makes, with the same unique indexes as
 // PostgreSQL (violations fail with Prisma's P2002).
 function createDatabase(options) {
@@ -28,6 +44,8 @@ function createDatabase(options) {
     session: [],
     pendingRegistration: [],
     emailCode: [],
+    ...Object.fromEntries(Object.entries(catalogDefaults).map(([table, columns]) =>
+      [table, (options.catalog?.[table] ?? []).map(row => ({ ...columns, ...row }))])),
   };
   const uniqueKeys = {
     user: [['id'], ['email'], ['googleSub']], session: [['id'], ['refreshTokenHash']],
@@ -39,9 +57,28 @@ function createDatabase(options) {
     pendingRegistration: () => ({}),
     emailCode: () => ({ attempts: 0 }),
   };
-  const relations = { session: { user: row => tables.user.find(user => user.id === row.userId) } };
+  // Relation fields: the table they point at, whether there are many, and how rows are linked.
+  const relations = {
+    session: { user: { table: 'user', where: row => ({ id: row.userId }) } },
+    restaurant: {
+      categories: { table: 'restaurantCategory', many: true, where: row => ({ restaurantId: row.id }) },
+      openingHours: { table: 'openingHours', many: true, where: row => ({ restaurantId: row.id }) },
+      sections: { table: 'menuSection', many: true, where: row => ({ restaurantId: row.id }) },
+    },
+    restaurantCategory: { category: { table: 'category', where: row => ({ id: row.categoryId }) } },
+    menuSection: { items: { table: 'menuItem', many: true, where: row => ({ sectionId: row.id }) } },
+    menuItem: { optionGroups: { table: 'menuItemOptionGroup', many: true, where: row => ({ menuItemId: row.id }) } },
+    menuItemOptionGroup: { optionGroup: { table: 'optionGroup', where: row => ({ id: row.optionGroupId }) } },
+    optionGroup: { options: { table: 'menuOption', many: true, where: row => ({ optionGroupId: row.id }) } },
+  };
+  const related = (table, key, row) => {
+    const { table: target, many, where } = relations[table][key];
+    const rows = tables[target].filter(matches(target, where(row)));
+    return many ? rows : rows[0];
+  };
   const operators = {
     gt: (a, b) => +a > +b, gte: (a, b) => +a >= +b, lt: (a, b) => +a < +b, lte: (a, b) => +a <= +b, not: (a, b) => a !== b,
+    in: (a, b) => b.includes(a),
   };
 
   const isObject = condition => condition !== null && typeof condition === 'object' && !(condition instanceof Date);
@@ -49,16 +86,38 @@ function createDatabase(options) {
   const compare = (value, condition) => isOperator(condition)
     ? Object.entries(condition).every(([op, expected]) => operators[op](value, expected))
     : value instanceof Date ? +value === +condition : value === condition;
-  // Relation filters (session.user) and compound keys (emailCode.email_purpose) hold nested objects.
-  const matches = (table, where = {}) => row => row !== undefined && Object.entries(where).every(([key, condition]) =>
-    relations[table]?.[key] ? matches('user', condition)(relations[table][key](row))
-      : isObject(condition) && !isOperator(condition) ? matches(table, condition)(row)
-        : compare(row[key], condition));
+  // Relation filters (session.user, restaurant.categories.some) and compound keys
+  // (emailCode.email_purpose) hold nested objects.
+  const matches = (table, where = {}) => row => row !== undefined && Object.entries(where).every(([key, condition]) => {
+    const relation = relations[table]?.[key];
+    if (relation?.many) {
+      const rows = related(table, key, row);
+      return Object.entries(condition).every(([mode, inner]) =>
+        mode === 'some' ? rows.some(matches(relation.table, inner))
+          : mode === 'none' ? !rows.some(matches(relation.table, inner)) : rows.every(matches(relation.table, inner)));
+    }
+    if (relation) return matches(relation.table, condition)(related(table, key, row));
+    return isObject(condition) && !isOperator(condition) ? matches(table, condition)(row) : compare(row[key], condition);
+  });
+  // orderBy: one { column: 'asc' | 'desc' } or a list of them, compared in order.
+  const sorted = (rows, orderBy = []) => [...rows].sort((a, b) => {
+    for (const order of [orderBy].flat()) {
+      const [[key, direction]] = Object.entries(order);
+      if (a[key] !== b[key]) return (a[key] < b[key] ? -1 : 1) * (direction === 'desc' ? -1 : 1);
+    }
+    return 0;
+  });
+  const findRows = (table, rows, { where, orderBy, skip = 0, take } = {}) =>
+    sorted(rows.filter(matches(table, where)), orderBy).slice(skip, take === undefined ? undefined : skip + take);
   const pick = (table, row, select) => {
     if (!row) return null;
     if (!select) return { ...row };
-    return Object.fromEntries(Object.entries(select).map(([key, value]) =>
-      [key, value.select ? pick('user', relations[table][key](row), value.select) : row[key]]));
+    return Object.fromEntries(Object.entries(select).map(([key, value]) => {
+      const relation = relations[table]?.[key];
+      if (!relation) return [key, row[key]];
+      if (!relation.many) return [key, pick(relation.table, related(table, key, row), value.select)];
+      return [key, findRows(relation.table, related(table, key, row), value).map(child => pick(relation.table, child, value.select))];
+    }));
   };
   const apply = (row, data) => {
     for (const [key, value] of Object.entries(data)) {
@@ -83,6 +142,8 @@ function createDatabase(options) {
       return pick(table, tables[table].find(matches(table, where)), select);
     },
     async findFirst({ where, select }) { return pick(table, tables[table].find(matches(table, where)), select); },
+    async findMany({ select, ...query } = {}) { return findRows(table, tables[table], query).map(row => pick(table, row, select)); },
+    async count({ where } = {}) { return tables[table].filter(matches(table, where)).length; },
     async create({ data, select }) {
       if (table === 'user' && options.parallelFirstLogin) {
         tables.user.push({ ...linkedUser, id: '22222222-2222-4222-8222-222222222222' });
@@ -116,8 +177,7 @@ function createDatabase(options) {
   });
 
   const client = {
-    user: delegate('user'), session: delegate('session'),
-    pendingRegistration: delegate('pendingRegistration'), emailCode: delegate('emailCode'),
+    ...Object.fromEntries(Object.keys(tables).map(table => [table, delegate(table)])),
     // Runs the callback against the same tables; the fake does not roll back.
     async $transaction(callback) { return callback(client); },
   };
@@ -249,11 +309,30 @@ function setup(reply = { access_token: 'private-token', id_token: 'private-id-to
       emit(event) { for (const listener of listeners[event] ?? []) listener(); },
     };
   }
+  // Like Express: exact paths first, then patterns such as /restaurants/:slug.
+  function findRoute(pathname) {
+    if (routes.has(pathname)) return { handlers: routes.get(pathname), params: {} };
+    for (const [pattern, handlers] of routes) {
+      const names = [];
+      const regex = pattern.replace(/\/$/, '').replace(/:(\w+)/g, (_, name) => { names.push(name); return '([^/]+)'; });
+      const match = pathname.match(new RegExp(`^${regex}/?$`));
+      if (match) return { handlers, params: Object.fromEntries(names.map((name, i) => [name, decodeURIComponent(match[i + 1])])) };
+    }
+    throw new Error(`No route for ${pathname}`);
+  }
   // Like Express 5: run handlers in order and send thrown or next(error) errors to the error handler.
+  // A query string in the path becomes req.query; a repeated key becomes an array.
   async function dispatch(path, req, res) {
-    req = { headers: {}, ip: '203.0.113.10', app: { get() {} }, ...req };
+    const [pathname, search = ''] = path.split('?');
+    const searchParams = new URLSearchParams(search);
+    const query = Object.fromEntries([...new Set(searchParams.keys())].map(key => {
+      const values = searchParams.getAll(key);
+      return [key, values.length > 1 ? values : values[0]];
+    }));
+    const { handlers, params } = findRoute(pathname);
+    req = { headers: {}, ip: '203.0.113.10', app: { get() {} }, query, params, ...req };
     try {
-      for (const handler of [...appMiddleware, ...routes.get(path)]) {
+      for (const handler of [...appMiddleware, ...handlers]) {
         let proceed = false;
         let failure;
         await handler(req, res, error => { if (error) failure = error; else proceed = true; });

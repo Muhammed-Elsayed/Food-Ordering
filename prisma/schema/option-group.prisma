@@ -1,0 +1,18 @@
+// A choice the customer makes for an item, such as Size (pick exactly 1) or Extras (pick up
+// to 5). Groups belong to a restaurant and are shared by its items, so "Extras" is defined once.
+model OptionGroup {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurantId String                @map("restaurant_id") @db.Uuid
+  restaurant   Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name         String
+  minSelect    Int                   @default(0) @map("min_select")
+  maxSelect    Int                   @default(1) @map("max_select")
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  items        MenuItemOptionGroup[]
+  options      MenuOption[]
+
+  @@unique([id, restaurantId], map: "option_groups_id_restaurant_id_key")
+  @@index([restaurantId], map: "option_groups_restaurant_id_idx")
+  @@map("option_groups")
+}

@@ -1,0 +1,18 @@
+// A heading on a restaurant's menu, such as "Beef Burgers" or "Drinks".
+model MenuSection {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name         String
+  description  String?
+  sortOrder    Int        @default(0) @map("sort_order")
+  isActive     Boolean    @default(true) @map("is_active")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  items        MenuItem[]
+
+  // Target of the menu_items foreign key that keeps an item in its own restaurant's section.
+  @@unique([id, restaurantId], map: "menu_sections_id_restaurant_id_key")
+  @@index([restaurantId], map: "menu_sections_restaurant_id_idx")
+  @@map("menu_sections")
+}

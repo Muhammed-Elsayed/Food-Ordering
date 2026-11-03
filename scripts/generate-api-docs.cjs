@@ -23,6 +23,23 @@ const session = {
   tokenType: 'Bearer', expiresIn: 900, refreshTokenExpiresIn: 86400, user,
 };
 
+const option = (id, name, extraPrice, isAvailable = true) => ({ id, name, extraPrice, isAvailable });
+const sizeGroup = {
+  id: '4b1d2c3e-0000-4000-8000-000000000040', name: 'Size', minSelect: 1, maxSelect: 1,
+  options: [option('4b1d2c3e-0000-4000-8000-000000000051', 'Medium', 0), option('4b1d2c3e-0000-4000-8000-000000000050', 'Large', 6000)],
+};
+const pizzaHut = {
+  id: '4b1d2c3e-0000-4000-8000-000000000010', slug: 'pizza-hut', name: 'Pizza Hut', description: 'Pizza, sides, and drinks.',
+  logoUrl: 'https://cdn.example.com/restaurants/pizza-hut/logo.png', coverUrl: null,
+  categories: [{ slug: 'pizza', name: 'Pizza' }], currency: 'EGP', deliveryFee: 2500, minimumOrder: 15000,
+  deliveryMinutes: { min: 30, max: 45 }, isOpen: true,
+};
+const buffaloBurger = {
+  ...pizzaHut, id: '4b1d2c3e-0000-4000-8000-000000000011', slug: 'buffalo-burger', name: 'Buffalo Burger',
+  description: 'Burgers, fries, and shakes.', logoUrl: 'https://cdn.example.com/restaurants/buffalo-burger/logo.png',
+  categories: [{ slug: 'burger', name: 'Burger' }], deliveryFee: 2000, minimumOrder: 0, deliveryMinutes: { min: 25, max: 40 },
+};
+
 const rateLimitHeaders = {
   'Retry-After': { description: 'Seconds until the limit resets.', schema: { type: 'integer' } },
   RateLimit: { description: 'e.g. `limit=5, remaining=0, reset=900`', schema: { type: 'string' } },
@@ -65,7 +82,10 @@ const openapi = {
     version: '1.0.0',
     license: { name: 'ISC' },
     description: [
-      'Accounts and authentication for the Food Ordering backend.',
+      'Accounts, authentication, and restaurant browsing for the Food Ordering backend.',
+      '',
+      '**Money.** Prices, fees, and minimum orders are whole numbers in the smallest unit of the',
+      "restaurant's `currency` (piasters for EGP): `12500` is 125.00 EGP.",
       '',
       '**Tokens.** Every login, verified sign-up, and refresh returns an `accessToken` (15 minutes) and a',
       '`refreshToken` (1 day, rotated on every use). Send the access token as `Authorization: Bearer <token>`.',
@@ -87,6 +107,7 @@ const openapi = {
       description: 'Change the password while logged in, or reset a forgotten one with an emailed code.',
     },
     { name: 'Google', description: 'Browser-only flow: open `/auth/google` in a browser, not in an API client.' },
+    { name: 'Browse', description: 'Categories, restaurants, and menus. Public: no login needed.' },
   ],
   paths: {
     '/health': {
@@ -327,6 +348,98 @@ const openapi = {
         },
       },
     },
+    '/categories': {
+      get: {
+        tags: ['Browse'], summary: 'List categories', operationId: 'listCategories', security: [],
+        description: 'Active categories in display order.',
+        responses: {
+          200: {
+            description: 'The categories.',
+            content: json(ref('CategoryList'), { categories: { categories: [
+              { id: '4b1d2c3e-0000-4000-8000-000000000002', slug: 'burger', name: 'Burger', imageUrl: 'https://cdn.example.com/categories/burger.png' },
+              { id: '4b1d2c3e-0000-4000-8000-000000000001', slug: 'pizza', name: 'Pizza', imageUrl: 'https://cdn.example.com/categories/pizza.png' },
+            ] } }),
+          },
+        },
+      },
+    },
+    '/restaurants': {
+      get: {
+        tags: ['Browse'], summary: 'List restaurants', operationId: 'listRestaurants', security: [],
+        description: [
+          'Active restaurants in display order, a page at a time. `isOpen` is true when the restaurant is taking',
+          'orders and it is within its opening hours, in its own time zone.',
+          '',
+          'An unknown category returns an empty list, not an error.',
+        ].join('\n'),
+        parameters: [
+          { name: 'category', in: 'query', required: false, description: 'Category slug, e.g. `pizza`. Case and surrounding spaces are ignored.', schema: { type: 'string', example: 'pizza' } },
+          { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 10000, default: 1 } },
+          { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 50, default: 20 } },
+        ],
+        responses: {
+          200: {
+            description: 'One page of restaurants. `total` counts every match.',
+            content: json(ref('RestaurantPage'), { restaurants: { restaurants: [buffaloBurger, pizzaHut], page: 1, limit: 20, total: 2 } }),
+          },
+          400: {
+            description: 'Invalid query. `fields` names every invalid parameter.',
+            content: json(ref('ValidationError'), {
+              invalidFields: err('BadRequestError', 'Some fields are invalid.', { fields: {
+                category: 'Use a category slug, for example pizza.', page: 'Use a whole number from 1 to 10000.',
+                limit: 'Use a whole number from 1 to 50.',
+              } }),
+            }),
+          },
+        },
+      },
+    },
+    '/restaurants/{slug}': {
+      get: {
+        tags: ['Browse'], summary: 'Restaurant page with its menu', operationId: 'getRestaurant', security: [],
+        description: [
+          'The restaurant, its opening hours, and its menu: sections → items → option groups → options.',
+          '',
+          '- Removed items, options, and sections are left out; so are sections with no items and option groups with no options.',
+          '- Sold-out items and options are included with `isAvailable: false`. An item is also unavailable while a',
+          '  required option group (`minSelect` ≥ 1) has too few available options.',
+          '- The customer picks `minSelect` to `maxSelect` options from each group. An option adds `extraPrice` to the item price.',
+        ].join('\n'),
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string', example: 'pizza-hut' } }],
+        responses: {
+          200: {
+            description: 'The restaurant and its menu.',
+            content: json(ref('RestaurantPageResponse'), { pizzaHut: {
+              restaurant: {
+                ...pizzaHut, phone: '+201001234567',
+                openingHours: [0, 1, 2, 3, 4, 5, 6].map(dayOfWeek => ({ dayOfWeek, opens: '12:00', closes: '02:00' })),
+              },
+              menu: [
+                {
+                  id: '4b1d2c3e-0000-4000-8000-000000000021', name: 'Pizzas', description: 'Hand-stretched dough.',
+                  items: [{
+                    id: '4b1d2c3e-0000-4000-8000-000000000031', name: 'Margherita', description: 'Tomato sauce and mozzarella.',
+                    imageUrl: 'https://cdn.example.com/items/margherita.jpg', price: 14000, isAvailable: true,
+                    optionGroups: [sizeGroup, {
+                      id: '4b1d2c3e-0000-4000-8000-000000000041', name: 'Extra toppings', minSelect: 0, maxSelect: 3,
+                      options: [option('4b1d2c3e-0000-4000-8000-000000000052', 'Olives', 1500), option('4b1d2c3e-0000-4000-8000-000000000053', 'Mushrooms', 1500, false)],
+                    }],
+                  }],
+                },
+                {
+                  id: '4b1d2c3e-0000-4000-8000-000000000020', name: 'Sides', description: null,
+                  items: [{
+                    id: '4b1d2c3e-0000-4000-8000-000000000033', name: 'Garlic bread', description: null, imageUrl: null,
+                    price: 4000, isAvailable: false, optionGroups: [],
+                  }],
+                },
+              ],
+            } }),
+          },
+          404: { description: 'No active restaurant has this slug.', content: json(ref('Error'), { notFound: err('NotFoundError', 'This restaurant does not exist.') }) },
+        },
+      },
+    },
     '/auth/google': {
       get: {
         tags: ['Google'], summary: 'Start Continue with Google (browser only)', operationId: 'googleStart', security: [],
@@ -459,6 +572,105 @@ const openapi = {
         allOf: [ref('Error'), { type: 'object', required: ['attemptsLeft'], properties: { attemptsLeft: { type: 'integer', minimum: 0 } } }],
       },
       MessageError: { type: 'object', required: ['message'], properties: { message: { type: 'string' } } },
+      Category: {
+        type: 'object', required: ['id', 'slug', 'name', 'imageUrl'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          slug: { type: 'string', description: 'Use as `?category=` on `/restaurants`.' },
+          name: { type: 'string' },
+          imageUrl: { type: 'string', format: 'uri', nullable: true },
+        },
+      },
+      CategoryList: { type: 'object', required: ['categories'], properties: { categories: { type: 'array', items: ref('Category') } } },
+      RestaurantSummary: {
+        type: 'object',
+        required: ['id', 'slug', 'name', 'description', 'logoUrl', 'coverUrl', 'categories', 'currency', 'deliveryFee', 'minimumOrder', 'deliveryMinutes', 'isOpen'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          slug: { type: 'string', description: 'Use in `/restaurants/{slug}`.' },
+          name: { type: 'string' },
+          description: { type: 'string', nullable: true },
+          logoUrl: { type: 'string', format: 'uri', nullable: true },
+          coverUrl: { type: 'string', format: 'uri', nullable: true },
+          categories: {
+            type: 'array',
+            items: { type: 'object', required: ['slug', 'name'], properties: { slug: { type: 'string' }, name: { type: 'string' } } },
+          },
+          currency: { type: 'string', description: 'ISO 4217 code.', example: 'EGP' },
+          deliveryFee: { type: 'integer', description: 'Smallest currency unit.', example: 2500 },
+          minimumOrder: { type: 'integer', description: 'Smallest currency unit; 0 means no minimum.', example: 15000 },
+          deliveryMinutes: {
+            type: 'object', required: ['min', 'max'], description: 'Estimated delivery time, e.g. 30–45 minutes.',
+            properties: { min: { type: 'integer' }, max: { type: 'integer' } },
+          },
+          isOpen: { type: 'boolean', description: 'Taking orders and within opening hours right now.' },
+        },
+      },
+      RestaurantPage: {
+        type: 'object', required: ['restaurants', 'page', 'limit', 'total'],
+        properties: {
+          restaurants: { type: 'array', items: ref('RestaurantSummary') },
+          page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer', description: 'Matches across all pages.' },
+        },
+      },
+      OpeningPeriod: {
+        type: 'object', required: ['dayOfWeek', 'opens', 'closes'],
+        description: "In the restaurant's time zone. When `closes` is not after `opens`, the period ends the next day.",
+        properties: {
+          dayOfWeek: { type: 'integer', minimum: 0, maximum: 6, description: '0 = Sunday.' },
+          opens: { type: 'string', example: '12:00' },
+          closes: { type: 'string', example: '02:00', description: '`24:00` means midnight.' },
+        },
+      },
+      RestaurantDetails: {
+        allOf: [ref('RestaurantSummary'), {
+          type: 'object', required: ['phone', 'openingHours'],
+          properties: {
+            phone: { type: 'string', nullable: true, description: 'E.164' },
+            openingHours: { type: 'array', items: ref('OpeningPeriod'), description: 'A day with no periods is closed.' },
+          },
+        }],
+      },
+      MenuOption: {
+        type: 'object', required: ['id', 'name', 'extraPrice', 'isAvailable'],
+        properties: {
+          id: { type: 'string', format: 'uuid' }, name: { type: 'string' },
+          extraPrice: { type: 'integer', description: 'Added to the item price. Smallest currency unit.' },
+          isAvailable: { type: 'boolean', description: 'False while sold out.' },
+        },
+      },
+      OptionGroup: {
+        type: 'object', required: ['id', 'name', 'minSelect', 'maxSelect', 'options'],
+        properties: {
+          id: { type: 'string', format: 'uuid' }, name: { type: 'string' },
+          minSelect: { type: 'integer', minimum: 0, description: 'At least this many options; 1 or more means required.' },
+          maxSelect: { type: 'integer', minimum: 1 },
+          options: { type: 'array', items: ref('MenuOption') },
+        },
+      },
+      MenuItem: {
+        type: 'object', required: ['id', 'name', 'description', 'imageUrl', 'price', 'isAvailable', 'optionGroups'],
+        properties: {
+          id: { type: 'string', format: 'uuid' }, name: { type: 'string' },
+          description: { type: 'string', nullable: true },
+          imageUrl: { type: 'string', format: 'uri', nullable: true },
+          price: { type: 'integer', description: 'Smallest currency unit.' },
+          isAvailable: { type: 'boolean', description: 'False while sold out or while a required choice has too few options left.' },
+          optionGroups: { type: 'array', items: ref('OptionGroup') },
+        },
+      },
+      MenuSection: {
+        type: 'object', required: ['id', 'name', 'description', 'items'],
+        properties: {
+          id: { type: 'string', format: 'uuid' }, name: { type: 'string' },
+          description: { type: 'string', nullable: true },
+          items: { type: 'array', items: ref('MenuItem') },
+        },
+      },
+      RestaurantPageResponse: {
+        type: 'object', required: ['restaurant', 'menu'],
+        properties: { restaurant: ref('RestaurantDetails'), menu: { type: 'array', items: ref('MenuSection') } },
+      },
     },
   },
   security: [{ bearerAuth: [] }],
@@ -485,7 +697,12 @@ const request = (name, method, urlPath, { body: requestBody, auth = false, tests
     auth: auth ? bearer : { type: 'noauth' },
     header: requestBody ? [{ key: 'Content-Type', value: 'application/json' }] : [],
     ...(requestBody && { body: raw(requestBody) }),
-    url: { raw: `{{baseUrl}}${urlPath}`, host: ['{{baseUrl}}'], path: urlPath.split('/').filter(Boolean) },
+    url: {
+      raw: `{{baseUrl}}${urlPath}`, host: ['{{baseUrl}}'], path: urlPath.split('?')[0].split('/').filter(Boolean),
+      ...(urlPath.includes('?') && {
+        query: [...new URLSearchParams(urlPath.split('?')[1])].map(([key, value]) => ({ key, value })),
+      }),
+    },
     ...(description && { description }),
   },
 });
@@ -502,6 +719,15 @@ const collection = {
   variable: [{ key: 'baseUrl', value: 'http://localhost:3000' }],
   item: [
     request('Health', 'GET', '/health'),
+    {
+      name: 'Browse',
+      item: [
+        request('Categories', 'GET', '/categories'),
+        request('Restaurants', 'GET', '/restaurants?page=1&limit=20'),
+        request('Restaurants in a category', 'GET', '/restaurants?category=pizza'),
+        request('Restaurant page and menu', 'GET', '/restaurants/pizza-hut'),
+      ],
+    },
     {
       name: 'Sign-up',
       item: [
